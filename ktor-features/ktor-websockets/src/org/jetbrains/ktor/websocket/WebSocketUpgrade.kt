@@ -1,5 +1,6 @@
 package org.jetbrains.ktor.websocket
 
+import kotlinx.coroutines.experimental.*
 import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.cio.*
 import org.jetbrains.ktor.content.*
@@ -33,7 +34,11 @@ class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val 
 
         webSocket.start()
 
-        return webSocket
+        return Closeable {
+            runBlocking {
+                webSocket.terminateConnection(null)
+            }
+        }
     }
 
     private fun sha1(s: String) = MessageDigest.getInstance("SHA1").digest(s.toByteArray(Charsets.ISO_8859_1))

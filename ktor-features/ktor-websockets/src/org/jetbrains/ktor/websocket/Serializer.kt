@@ -15,6 +15,8 @@ internal class Serializer {
     val hasOutstandingBytes: Boolean
         get() = q.isNotEmpty() || frameBody != null
 
+    val remainingCapacity: Int get() = q.remainingCapacity()
+
     fun enqueue(f: Frame) {
         q.put(f)
     }

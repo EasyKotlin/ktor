@@ -1,46 +1,45 @@
 package org.jetbrains.ktor.websocket
 
+import kotlinx.coroutines.experimental.channels.*
 import org.jetbrains.ktor.cio.*
 import java.nio.*
-import java.util.concurrent.atomic.*
 
-internal class WebSocketReader(val channel: ReadChannel, val maxFrameSize: () -> Long, val frameHandler: suspend (Frame) -> Unit) {
-    private val state = AtomicReference(State.FRAME)
-    private val buffer = ByteBuffer.allocate(8192).apply { flip() }
+internal class WebSocketReader(val channel: ReadChannel, val maxFrameSize: () -> Long, val destination: SendChannel<Frame>) {
+    private var state = State.HEADER
     private val frameParser = FrameParser()
     private val collector = SimpleFrameCollector()
-    private var suspended = false
 
-    suspend fun readLoop() {
-        while (!suspended) {
-            buffer.compact()
+    suspend fun readLoop(buffer: ByteBuffer) {
+        buffer.clear()
+
+        while (true) {
             if (channel.read(buffer) == -1) {
-                state.set(State.END)
+                state = State.END
                 break
             }
+
             buffer.flip()
-            parseLoop()
+            parseLoop(buffer)
+            buffer.compact()
         }
     }
 
-    private suspend fun parseLoop() {
-        loop@
+    private suspend fun parseLoop(buffer: ByteBuffer) {
         while (buffer.hasRemaining()) {
-            when (state.get()!!) {
-                State.FRAME -> {
+            when (state) {
+                State.HEADER -> {
                     frameParser.frame(buffer)
 
                     if (frameParser.bodyReady) {
-                        state.set(State.BODY)
+                        state = State.BODY
                         if (frameParser.length > Int.MAX_VALUE || frameParser.length > maxFrameSize()) {
-                            suspended = true
                             throw FrameTooBigException(frameParser.length)
                         }
 
                         collector.start(frameParser.length.toInt(), buffer)
                         handleFrameIfProduced()
                     } else {
-                        break@loop
+                        return
                     }
                 }
                 State.BODY -> {
@@ -55,8 +54,8 @@ internal class WebSocketReader(val channel: ReadChannel, val maxFrameSize: () ->
 
     private suspend fun handleFrameIfProduced() {
         if (!collector.hasRemaining) {
-            state.set(State.FRAME)
-            frameHandler(Frame.byType(frameParser.fin, frameParser.frameType, collector.take(frameParser.maskKey)))
+            state = State.HEADER
+            destination.send(Frame.byType(frameParser.fin, frameParser.frameType, collector.take(frameParser.maskKey)))
             frameParser.bodyComplete()
         }
     }
@@ -67,7 +66,7 @@ internal class WebSocketReader(val channel: ReadChannel, val maxFrameSize: () ->
     }
 
     enum class State {
-        FRAME,
+        HEADER,
         BODY,
         END
     }

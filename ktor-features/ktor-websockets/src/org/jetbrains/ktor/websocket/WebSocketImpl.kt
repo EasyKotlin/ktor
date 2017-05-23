@@ -1,28 +1,59 @@
 package org.jetbrains.ktor.websocket
 
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.channels.*
 import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.cio.*
+import org.jetbrains.ktor.pipeline.*
 import java.io.*
 import java.time.*
-import java.util.concurrent.*
-
-private val executor by lazy { ScheduledThreadPoolExecutor(Runtime.getRuntime().availableProcessors() * 8) }
-private val dispatcher by lazy { executor.asCoroutineDispatcher() }
+import java.util.concurrent.atomic.*
 
 internal class WebSocketImpl(call: ApplicationCall,
                              val readChannel: ReadChannel,
                              val writeChannel: WriteChannel,
-                             val channel: Closeable) : WebSocket(call) {
+                             val channel: Closeable,
+                             val pool: ByteBufferPool = NoPool) : WebSocket(call) {
 
-    private val controlFrameHandler = ControlFrameHandler(this, executor)
-    private val outbound = WebSocketWriter(writeChannel)
-    private val reader = WebSocketReader(readChannel, { maxFrameSize }, { frameHandler(it) })
+    private val messageHandler = actor<Frame>(application.executor.asCoroutineDispatcher(), capacity = 8, start = CoroutineStart.LAZY) {
+        consumeEach { msg ->
+            when (msg) {
+                is Frame.Close -> {
+                    closeSequence.send(CloseFrameEvent.Received(msg))
+                }
+                is Frame.Pong -> {
+                    try {
+                        pingPongJob.get()?.send(msg)
+                    } catch (ignore: ClosedSendChannelException) {
+                    }
+                }
+                is Frame.Ping -> {
+                    ponger.send(msg)
+                }
+                else -> {
+                }
+            }
+
+            frameHandler(msg)
+        }
+    }
+
+    private val writer = WebSocketWriter(writeChannel)
+    private val reader = WebSocketReader(readChannel, { maxFrameSize }, messageHandler)
+
+    private val closeSequence = closeSequence(application.executor.asCoroutineDispatcher(), writer, timeout) { reason ->
+        launch(application.executor.asCoroutineDispatcher()) {
+            terminateConnection(reason)
+        }
+    }
+
+    private val pingPongJob = AtomicReference<ActorJob<Frame.Pong>?>()
+    private val ponger = ponger(application.executor.asCoroutineDispatcher(), this, pool)
 
     override var masking: Boolean
-        get() = outbound.masking
+        get() = writer.masking
         set(value) {
-            outbound.masking = value
+            writer.masking = value
         }
 
     init {
@@ -30,9 +61,11 @@ internal class WebSocketImpl(call: ApplicationCall,
     }
 
     fun start() {
-        launch(dispatcher) {
+        launchAsync(application.executor) {
+            val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
+
             try {
-                reader.readLoop()
+                reader.readLoop(ticket.buffer)
             } catch (tooBig: WebSocketReader.FrameTooBigException) {
                 errorHandler(tooBig)
                 close(CloseReason(CloseReason.Codes.TOO_BIG, tooBig.message))
@@ -40,7 +73,21 @@ internal class WebSocketImpl(call: ApplicationCall,
                 errorHandler(t)
                 close(CloseReason(CloseReason.Codes.UNEXPECTED_CONDITION, t.javaClass.name))
             } finally {
-                terminateConnection(controlFrameHandler.currentReason)
+                pool.release(ticket)
+                closeSequence.start()
+            }
+        }
+
+        launchAsync(application.executor) {
+            val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
+
+            try {
+                writer.writeLoop(ticket.buffer)
+            } catch (t: Throwable) {
+                errorHandler(t)
+            } finally {
+                pool.release(ticket)
+                closeSequence.start()
             }
         }
     }
@@ -49,64 +96,38 @@ internal class WebSocketImpl(call: ApplicationCall,
         set(value) {
             field = value
             if (value == null) {
-                controlFrameHandler.cancelPingPong()
+                pingPongJob.getAndSet(null)?.cancel()
             } else {
-                controlFrameHandler.schedulePingPong(value)
+                val j = pinger(application.executor.asCoroutineDispatcher(), this, value, timeout, pool, closeSequence)
+                pingPongJob.getAndSet(j)?.cancel()
+                j.start()
             }
         }
-
-    override suspend fun frameHandler(frame: Frame) {
-        if (frame.frameType.controlFrame) {
-            controlFrameHandler.received(frame)
-        }
-
-        super.frameHandler(frame)
-    }
-
-    override fun enqueue(frame: Frame) {
-        if (frame.frameType.controlFrame) {
-            throw IllegalArgumentException("You should never enqueue control frames as they are delivery-time sensitive, use send() instead")
-        }
-
-        outbound.enqueue(frame)
-    }
 
     suspend override fun flush() {
-        try {
-            outbound.flush()
-        } catch (t: Throwable) {
-            try {
-                errorHandler(t)
-            } finally {
-                terminateConnection(controlFrameHandler.currentReason)
-                throw t
-            }
-        }
+        writer.flush()
     }
 
     override suspend fun send(frame: Frame) {
-        if (frame.frameType.controlFrame) {
-            controlFrameHandler.sent(frame)
-        }
-
-        try {
-            outbound.send(frame)
-        } catch (t: Throwable) {
-            try {
-                errorHandler(t)
-            } finally {
-                terminateConnection(controlFrameHandler.currentReason)
-                throw t
-            }
-        }
-
         if (frame is Frame.Close) {
-            controlFrameHandler.closeSentAndWritten()
+            closeSequence.send(CloseFrameEvent.ToSend(frame))
+        } else {
+            writer.send(frame)
         }
     }
 
-    override fun close() {
-        controlFrameHandler.stop()
+    suspend override fun awaitClose() {
+        closeSequence.join()
+    }
+
+    override fun terminate() {
+        super.terminate()
+
+        writer.close()
+        messageHandler.close()
+        pingPongJob.getAndSet(null)?.cancel()
+        ponger.close()
+        closeSequence.cancel()
 
         try {
             readChannel.close()
@@ -132,9 +153,10 @@ internal class WebSocketImpl(call: ApplicationCall,
     }
 
     suspend fun terminateConnection(reason: CloseReason?) {
-        use {
-            controlFrameHandler.stop()
+        try {
             closeHandler(reason)
+        } finally {
+            terminate()
         }
     }
 }

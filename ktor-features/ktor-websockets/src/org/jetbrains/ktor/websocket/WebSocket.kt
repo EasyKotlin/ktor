@@ -1,15 +1,15 @@
 package org.jetbrains.ktor.websocket
 
+import kotlinx.coroutines.experimental.*
 import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.http.*
 import org.jetbrains.ktor.routing.*
 import org.jetbrains.ktor.util.*
-import java.io.*
 import java.time.*
 import java.util.*
 import java.util.concurrent.atomic.*
 
-abstract class WebSocket internal constructor(val call: ApplicationCall) : Closeable {
+abstract class WebSocket internal constructor(val call: ApplicationCall) {
     val application: Application = call.application
 
     private val handlers = ArrayList<suspend (Frame) -> Unit>()
@@ -32,8 +32,14 @@ abstract class WebSocket internal constructor(val call: ApplicationCall) : Close
     var timeout: Duration = Duration.ofSeconds(15)
     abstract var pingInterval: Duration?
 
-    fun handle(handler: suspend (Frame) -> Unit) {
+    fun handle(handler: suspend (Frame) -> Unit): DisposableHandle {
         handlers.add(handler)
+
+        return object: DisposableHandle {
+            override fun dispose() {
+                handlers.remove(handler)
+            }
+        }
     }
 
     fun handleError(handler: (Throwable) -> Unit) {
@@ -44,21 +50,26 @@ abstract class WebSocket internal constructor(val call: ApplicationCall) : Close
         closeHandlers.add(handler)
     }
 
-    abstract fun enqueue(frame: Frame)
+    @Deprecated("Use send instead", ReplaceWith("send(frame)"))
+    fun enqueue(frame: Frame) {
+        if (frame.frameType.controlFrame) {
+            throw IllegalArgumentException("You should never enqueue control frames as they are delivery-time sensitive, use send() instead")
+        }
+
+        runBlocking {
+            send(frame)
+        }
+    }
+
     abstract suspend fun flush()
     abstract suspend fun send(frame: Frame)
 
     suspend fun close(reason: CloseReason) {
-        send(Frame.Close(buildByteBuffer {
-            putShort(reason.code)
-            putString(reason.message, Charsets.UTF_8)
-        }))
+        send(Frame.Close(reason))
         awaitClose()
     }
 
-    suspend fun awaitClose() {
-        closedLatch.await()
-    }
+    abstract suspend fun awaitClose()
 
     protected suspend open fun frameHandler(frame: Frame) {
         if (!closedNotified.get()) {
@@ -78,12 +89,11 @@ abstract class WebSocket internal constructor(val call: ApplicationCall) : Close
 
     protected suspend open fun closeHandler(reason: CloseReason?) {
         if (closedNotified.compareAndSet(false, true)) {
-            try {
-                closeHandlers.forEach { it(reason) }
-            } finally {
-                closedLatch.countDown()
-            }
+            closeHandlers.forEach { it(reason) }
         }
+    }
+
+    internal open fun terminate() {
     }
 }
 
