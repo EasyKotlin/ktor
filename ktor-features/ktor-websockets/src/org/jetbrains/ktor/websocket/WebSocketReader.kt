@@ -1,15 +1,28 @@
 package org.jetbrains.ktor.websocket
 
+import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.channels.*
 import org.jetbrains.ktor.cio.*
 import java.nio.*
+import kotlin.coroutines.experimental.*
 
 internal class WebSocketReader(val channel: ReadChannel, val maxFrameSize: () -> Long, val destination: SendChannel<Frame>) {
     private var state = State.HEADER
     private val frameParser = FrameParser()
     private val collector = SimpleFrameCollector()
 
-    suspend fun readLoop(buffer: ByteBuffer) {
+    fun start(ctx: CoroutineContext, pool: ByteBufferPool): Job {
+        return launch(ctx) {
+            val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
+            try {
+                readLoop(ticket.buffer)
+            } finally {
+                pool.release(ticket)
+            }
+        }
+    }
+
+    private suspend fun readLoop(buffer: ByteBuffer) {
         buffer.clear()
 
         while (true) {

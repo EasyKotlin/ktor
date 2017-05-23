@@ -10,6 +10,18 @@ internal class WebSocketWriter(val writeChannel: WriteChannel) {
     val queue = Channel<Any>(1024)
     var masking: Boolean = false
 
+    fun start(ctx: CoroutineDispatcher, pool: ByteBufferPool): Job {
+        return launch(ctx) {
+            val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
+
+            try {
+                writeLoop(ticket.buffer)
+            } finally {
+                pool.release(ticket)
+            }
+        }
+    }
+
     suspend fun writeLoop(buffer: ByteBuffer) {
         val serializer = Serializer()
         buffer.clear()
