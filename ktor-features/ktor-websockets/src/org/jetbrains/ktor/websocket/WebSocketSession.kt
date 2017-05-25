@@ -9,7 +9,7 @@ import java.time.*
 import java.util.*
 import java.util.concurrent.atomic.*
 
-abstract class WebSocket internal constructor(val call: ApplicationCall) {
+abstract class WebSocketSession internal constructor(val call: ApplicationCall) {
     val application: Application = call.application
 
     private val handlers = ArrayList<suspend (Frame) -> Unit>()
@@ -97,7 +97,16 @@ abstract class WebSocket internal constructor(val call: ApplicationCall) {
     }
 }
 
-fun Route.webSocket(path: String, protocol: String? = null, configure: suspend WebSocket.() -> Unit) {
+@Deprecated("Use WebSocketSession instead", ReplaceWith("WebSocketSession"))
+typealias WebSocket = WebSocketSession
+
+fun Route.webSocket(path: String, protocol: String? = null, configure: suspend WebSocketSession.() -> Unit) {
+    try {
+        application.feature(WebSockets)
+    } catch (ifMissing: Throwable) {
+        application.install(WebSockets)
+    }
+
     route(HttpMethod.Get, path) {
         header(HttpHeaders.Connection, "Upgrade") {
             header(HttpHeaders.Upgrade, "websocket") {

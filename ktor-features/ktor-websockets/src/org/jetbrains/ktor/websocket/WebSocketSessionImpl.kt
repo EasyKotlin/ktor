@@ -9,21 +9,14 @@ import java.time.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.*
 
-internal class WebSocketImpl(call: ApplicationCall,
-                             val readChannel: ReadChannel,
-                             val writeChannel: WriteChannel,
-                             val channel: Closeable,
-                             val pool: ByteBufferPool = NoPool) : WebSocket(call) {
+internal class WebSocketSessionImpl(call: ApplicationCall,
+                                    val readChannel: ReadChannel,
+                                    val writeChannel: WriteChannel,
+                                    val channel: Closeable,
+                                    val pool: ByteBufferPool = NoPool,
+                                    val webSockets: WebSockets) : WebSocketSession(call) {
 
-    companion object {
-        val hostPool: Executor = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors())
-        val appPool: Executor = Executors.newCachedThreadPool()
-
-        val hostDispatcher: CoroutineDispatcher = hostPool.asCoroutineDispatcher()
-        val appDispatcher: CoroutineDispatcher = appPool.asCoroutineDispatcher()
-    }
-
-    private val messageHandler = actor<Frame>(hostDispatcher, capacity = 8, start = CoroutineStart.LAZY) {
+    private val messageHandler = actor<Frame>(webSockets.hostDispatcher, capacity = 8, start = CoroutineStart.LAZY) {
         consumeEach { msg ->
             when (msg) {
                 is Frame.Close -> {
@@ -42,7 +35,7 @@ internal class WebSocketImpl(call: ApplicationCall,
                 }
             }
 
-            run(appDispatcher) {
+            run(webSockets.appDispatcher) {
                 frameHandler(msg)
             }
         }
@@ -51,14 +44,14 @@ internal class WebSocketImpl(call: ApplicationCall,
     private val writer = WebSocketWriter(writeChannel)
     private val reader = WebSocketReader(readChannel, { maxFrameSize }, messageHandler)
 
-    private val closeSequence = closeSequence(hostDispatcher, writer, timeout) { reason ->
-        launch(hostDispatcher) {
+    private val closeSequence = closeSequence(webSockets.hostDispatcher, writer, timeout) { reason ->
+        launch(webSockets.hostDispatcher) {
             terminateConnection(reason)
         }
     }
 
     private val pingPongJob = AtomicReference<ActorJob<Frame.Pong>?>()
-    private val ponger = ponger(hostDispatcher, this, pool)
+    private val ponger = ponger(webSockets.hostDispatcher, this, pool)
 
     override var masking: Boolean
         get() = writer.masking
@@ -110,7 +103,7 @@ internal class WebSocketImpl(call: ApplicationCall,
             if (value == null) {
                 pingPongJob.getAndSet(null)?.cancel()
             } else {
-                val j = pinger(hostDispatcher, this, value, timeout, pool, closeSequence)
+                val j = pinger(webSockets.hostDispatcher, this, value, timeout, pool, closeSequence)
                 pingPongJob.getAndSet(j)?.cancel()
                 j.start()
             }
@@ -159,14 +152,14 @@ internal class WebSocketImpl(call: ApplicationCall,
             application.log.debug("Failed to close write channel")
         }
 
-        runBlocking(appDispatcher) {
+        runBlocking(webSockets.appDispatcher) {
             closeHandler(null)
         }
     }
 
     suspend fun terminateConnection(reason: CloseReason?) {
         try {
-            run(appDispatcher) {
+            run(webSockets.appDispatcher) {
                 closeHandler(reason)
             }
         } finally {

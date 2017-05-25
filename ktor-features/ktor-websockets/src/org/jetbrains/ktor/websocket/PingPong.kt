@@ -11,7 +11,7 @@ import java.time.*
 import java.util.concurrent.*
 import kotlin.coroutines.experimental.*
 
-fun ponger(ctx: CoroutineContext, ws: WebSocket, pool: ByteBufferPool): ActorJob<Frame.Ping> {
+fun ponger(ctx: CoroutineContext, ws: WebSocketSession, pool: ByteBufferPool): ActorJob<Frame.Ping> {
     return actor(ctx, 5, CoroutineStart.LAZY) {
         consumeEach { frame ->
             val message = frame.buffer.copy(pool)
@@ -24,7 +24,7 @@ fun ponger(ctx: CoroutineContext, ws: WebSocket, pool: ByteBufferPool): ActorJob
     }
 }
 
-fun pinger(ctx: CoroutineContext, ws: WebSocket, period: Duration, timeout: Duration, pool: ByteBufferPool, closeSequence: SendChannel<CloseFrameEvent>): ActorJob<Frame.Pong> {
+fun pinger(ctx: CoroutineContext, ws: WebSocketSession, period: Duration, timeout: Duration, pool: ByteBufferPool, closeSequence: SendChannel<CloseFrameEvent>): ActorJob<Frame.Pong> {
     val periodMillis = period.toMillis()
     val timeoutMillis = timeout.toMillis()
     val encoder = Charsets.ISO_8859_1.newEncoder()
@@ -72,7 +72,7 @@ fun pinger(ctx: CoroutineContext, ws: WebSocket, period: Duration, timeout: Dura
     return j
 }
 
-private suspend fun WebSocket.sendPing(buffer: ByteBuffer, e: CharsetEncoder, content: String) {
+private suspend fun WebSocketSession.sendPing(buffer: ByteBuffer, e: CharsetEncoder, content: String) {
     with(buffer) {
         clear()
         e.reset()
