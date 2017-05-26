@@ -39,7 +39,7 @@ internal class JettyKtorHandler(val environment: ApplicationHostEnvironment, val
             } else {
                 next()
             }
-        })
+        }, userAppContext = dispatcher)
 
         try {
             val contentType = request.contentType

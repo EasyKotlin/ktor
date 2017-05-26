@@ -1,6 +1,7 @@
 package org.jetbrains.ktor.websocket
 
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.channels.*
 import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.http.*
 import org.jetbrains.ktor.routing.*
@@ -31,6 +32,7 @@ abstract class WebSocketSession internal constructor(val call: ApplicationCall) 
     var timeout: Duration = Duration.ofSeconds(15)
     abstract var pingInterval: Duration?
 
+    @Deprecated("")
     fun handle(handler: suspend (Frame) -> Unit): DisposableHandle {
         handlers.add(handler)
 
@@ -41,10 +43,12 @@ abstract class WebSocketSession internal constructor(val call: ApplicationCall) 
         }
     }
 
+    @Deprecated("")
     fun handleError(handler: (Throwable) -> Unit) {
         errorHandlers.add(handler)
     }
 
+    @Deprecated("")
     fun close(handler: suspend (reason: CloseReason?) -> Unit) {
         closeHandlers.add(handler)
     }
@@ -70,12 +74,14 @@ abstract class WebSocketSession internal constructor(val call: ApplicationCall) 
 
     abstract suspend fun awaitClose()
 
+    @Deprecated("")
     protected suspend open fun frameHandler(frame: Frame) {
         if (!closedNotified.get()) {
             handlers.forEach { it(frame) }
         }
     }
 
+    @Deprecated("")
     protected suspend open fun errorHandler(t: Throwable) {
         errorHandlers.forEach {
             try {
@@ -86,6 +92,7 @@ abstract class WebSocketSession internal constructor(val call: ApplicationCall) 
         }
     }
 
+    @Deprecated("")
     protected suspend open fun closeHandler(reason: CloseReason?) {
         if (closedNotified.compareAndSet(false, true)) {
             closeHandlers.forEach { it(reason) }
@@ -99,13 +106,7 @@ abstract class WebSocketSession internal constructor(val call: ApplicationCall) 
 @Deprecated("Use WebSocketSession instead", ReplaceWith("WebSocketSession"))
 typealias WebSocket = WebSocketSession
 
-fun Route.webSocket(path: String, protocol: String? = null, configure: suspend WebSocketSession.() -> Unit) {
-    try {
-        application.feature(WebSockets)
-    } catch (ifMissing: Throwable) {
-        application.install(WebSockets)
-    }
-
+fun Route.webSocketRaw(path: String, protocol: String?, handler: suspend WebSocketSession.() -> Unit) {
     route(HttpMethod.Get, path) {
         header(HttpHeaders.Connection, "Upgrade") {
             header(HttpHeaders.Upgrade, "websocket") {
@@ -113,7 +114,7 @@ fun Route.webSocket(path: String, protocol: String? = null, configure: suspend W
                     handle {
                         //val extensions = call.request.header(HttpHeaders.SecWebSocketExtensions)
 
-                        call.respond(WebSocketUpgrade(call, protocol, configure))
+                        call.respond(WebSocketUpgrade(call, protocol, handler))
                     }
                 }
             }

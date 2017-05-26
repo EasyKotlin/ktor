@@ -1,34 +1,33 @@
 package org.jetbrains.ktor.websocket
 
 import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.Channel
+import kotlinx.coroutines.experimental.channels.*
 import org.jetbrains.ktor.cio.*
 import java.nio.*
 import java.util.concurrent.atomic.*
+import kotlin.coroutines.experimental.*
 
-internal class WebSocketWriter(val writeChannel: WriteChannel) {
-    val queue = Channel<Any>(1024)
-    var masking: Boolean = false
+internal class WebSocketWriter(val writeChannel: WriteChannel, ctx: CoroutineContext, val pool: ByteBufferPool) {
+    private val queue = actor<Any>(ctx, capacity = 8) {
+        val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
 
-    fun start(ctx: CoroutineDispatcher, pool: ByteBufferPool): Job {
-        return launch(ctx) {
-            val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
-
-            try {
-                writeLoop(ticket.buffer)
-            } finally {
-                pool.release(ticket)
-            }
+        try {
+            writeLoop(ticket.buffer)
+        } finally {
+            pool.release(ticket)
         }
     }
+    var masking: Boolean = false
 
-    suspend fun writeLoop(buffer: ByteBuffer) {
+    fun start(ctx: CoroutineContext, pool: ByteBufferPool): ActorJob<Frame> {
+        return queue.apply { start() }
+    }
+
+    suspend fun ActorScope<Any>.writeLoop(buffer: ByteBuffer) {
         val serializer = Serializer()
         buffer.clear()
 
-        while (true) {
-            val msg = queue.receiveOrNull() ?: break
-
+        consumeEach { msg ->
             if (msg is Frame) {
                 serializer.enqueue(msg)
                 drainQueueAndSerialize(serializer, buffer)
@@ -39,12 +38,12 @@ internal class WebSocketWriter(val writeChannel: WriteChannel) {
         }
     }
 
-    private suspend fun drainQueueAndSerialize(serializer: Serializer, buffer: ByteBuffer) {
+    private suspend fun ActorScope<Any>.drainQueueAndSerialize(serializer: Serializer, buffer: ByteBuffer) {
         var flush: FlushRequest? = null
 
-        while (!queue.isEmpty || serializer.hasOutstandingBytes) {
+        while (!isEmpty || serializer.hasOutstandingBytes) {
             while (flush == null && serializer.remainingCapacity > 0) {
-                val msg = queue.poll() ?: break
+                val msg = poll() ?: break
                 if (msg is FlushRequest) flush = msg
                 else if (msg is Frame) {
                     serializer.enqueue(msg)
@@ -85,11 +84,14 @@ internal class WebSocketWriter(val writeChannel: WriteChannel) {
      * Ensures all enqueued messages has been written
      */
     suspend fun flush() {
-        val fr = FlushRequest()
-        queue.send(fr)
+        try {
+            val fr = FlushRequest()
+            queue.send(fr)
 
-        return suspendCancellableCoroutine { c ->
-            fr.setup(c)
+            return suspendCancellableCoroutine { c ->
+                fr.setup(c)
+            }
+        } catch (ignore: ClosedSendChannelException) {
         }
     }
 

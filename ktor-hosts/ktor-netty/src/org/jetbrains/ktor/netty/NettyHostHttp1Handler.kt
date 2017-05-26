@@ -4,6 +4,7 @@ import io.netty.channel.*
 import io.netty.handler.codec.http.*
 import io.netty.handler.codec.http.HttpResponseStatus.*
 import io.netty.handler.codec.http.HttpVersion.*
+import kotlinx.coroutines.experimental.*
 
 @ChannelHandler.Sharable
 internal class NettyHostHttp1Handler(private val host: NettyApplicationHost) : SimpleChannelInboundHandler<HttpRequest>(false) {
@@ -21,7 +22,7 @@ internal class NettyHostHttp1Handler(private val host: NettyApplicationHost) : S
             httpContentQueue.queue.push(message, message is LastHttpContent)
         }
 
-        val call = NettyApplicationCall(host.application, context, message, httpContentQueue.queue)
+        val call = NettyApplicationCall(host.application, context, message, httpContentQueue.queue, context.executor().asCoroutineDispatcher())
         context.fireChannelRead(call)
     }
 }

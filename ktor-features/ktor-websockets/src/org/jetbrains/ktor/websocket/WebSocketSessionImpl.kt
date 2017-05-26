@@ -6,17 +6,21 @@ import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.cio.*
 import java.io.*
 import java.time.*
-import java.util.concurrent.*
 import java.util.concurrent.atomic.*
+import kotlin.coroutines.experimental.*
 
 internal class WebSocketSessionImpl(call: ApplicationCall,
                                     val readChannel: ReadChannel,
                                     val writeChannel: WriteChannel,
                                     val channel: Closeable,
                                     val pool: ByteBufferPool = NoPool,
-                                    val webSockets: WebSockets) : WebSocketSession(call) {
+                                    val webSockets: WebSockets,
+                                    val hostContext: CoroutineContext,
+                                    val userContext: CoroutineContext,
+                                    val handle: suspend WebSocketSession.() -> Unit
+                                    ) : WebSocketSession(call) {
 
-    private val messageHandler = actor<Frame>(webSockets.hostDispatcher, capacity = 8, start = CoroutineStart.LAZY) {
+    private val messageHandler = actor<Frame>(hostContext, capacity = 8, start = CoroutineStart.LAZY) {
         consumeEach { msg ->
             when (msg) {
                 is Frame.Close -> {
@@ -41,17 +45,17 @@ internal class WebSocketSessionImpl(call: ApplicationCall,
         }
     }
 
-    private val writer = WebSocketWriter(writeChannel)
+    private val writer = WebSocketWriter(writeChannel, hostContext, pool)
     private val reader = WebSocketReader(readChannel, { maxFrameSize }, messageHandler)
 
-    private val closeSequence = closeSequence(webSockets.hostDispatcher, writer, timeout) { reason ->
-        launch(webSockets.hostDispatcher) {
+    private val closeSequence = closeSequence(hostContext, writer, timeout) { reason ->
+        launch(hostContext) {
             terminateConnection(reason)
         }
     }
 
     private val pingPongJob = AtomicReference<ActorJob<Frame.Pong>?>()
-    private val ponger = ponger(webSockets.hostDispatcher, this, pool)
+    private val ponger = ponger(hostContext, this, pool)
 
     override var masking: Boolean
         get() = writer.masking
@@ -64,35 +68,40 @@ internal class WebSocketSessionImpl(call: ApplicationCall,
     }
 
     fun start() {
-        reader.start(CommonPool, pool).apply {
-            invokeOnCompletion { t ->
-                if (t != null) {
-                    launch(CommonPool) {
-                        errorHandler(t)
+        val rj = reader.start(hostContext, pool)
+        val wj = writer.start(hostContext, pool)
 
-                        when (t) {
-                            is WebSocketReader.FrameTooBigException -> {
-                                close(CloseReason(CloseReason.Codes.TOO_BIG, t.message))
-                            }
-                            else -> {
-                                close(CloseReason(CloseReason.Codes.UNEXPECTED_CONDITION, t.javaClass.name))
-                            }
-                        }
+        rj.invokeOnCompletion { t ->
+            launch(hostContext) {
+                val reason = when (t) {
+                    null -> null
+                    is WebSocketReader.FrameTooBigException -> {
+                        CloseReason(CloseReason.Codes.TOO_BIG, t.message)
                     }
-                } else {
-                    closeSequence.start()
+                    else -> {
+                        CloseReason(CloseReason.Codes.UNEXPECTED_CONDITION, t.javaClass.name)
+                    }
+                }
+
+                try {
+                    if (reason != null) {
+                        close(reason)
+                    }
+                } catch (ignore: ClosedSendChannelException) {
                 }
             }
+
+            messageHandler.close(t)
         }
 
-        writer.start(CommonPool, pool).apply {
-            invokeOnCompletion { t ->
-                if (t != null) {
-                    launch(CommonPool) {
-                        errorHandler(t)
-                    }
+        wj.invokeOnCompletion { t ->
+            messageHandler.close(t)
+
+            launch(hostContext) {
+                try {
+                    closeSequence.send(CloseFrameEvent.Died)
+                } catch (ignore: ClosedSendChannelException) {
                 }
-                closeSequence.start()
             }
         }
     }
@@ -103,7 +112,7 @@ internal class WebSocketSessionImpl(call: ApplicationCall,
             if (value == null) {
                 pingPongJob.getAndSet(null)?.cancel()
             } else {
-                val j = pinger(webSockets.hostDispatcher, this, value, timeout, pool, closeSequence)
+                val j = pinger(hostContext, this, value, timeout, pool, closeSequence)
                 pingPongJob.getAndSet(j)?.cancel()
                 j.start()
             }
@@ -152,7 +161,7 @@ internal class WebSocketSessionImpl(call: ApplicationCall,
             application.log.debug("Failed to close write channel")
         }
 
-        runBlocking(webSockets.appDispatcher) {
+        runBlocking(userContext) {
             closeHandler(null)
         }
     }

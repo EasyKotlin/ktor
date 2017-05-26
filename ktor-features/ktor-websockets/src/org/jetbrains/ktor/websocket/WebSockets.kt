@@ -12,10 +12,16 @@ class WebSockets(
         val maxFrameSize: Long,
         val masking: Boolean
 ) {
+    @Deprecated("")
     val hostPool: ExecutorService = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors())
+
+    @Deprecated("")
     val appPool: ExecutorService = Executors.newCachedThreadPool()
 
+    @Deprecated("")
     val hostDispatcher: CoroutineDispatcher = hostPool.asCoroutineDispatcher()
+
+    @Deprecated("")
     val appDispatcher: CoroutineDispatcher = appPool.asCoroutineDispatcher()
 
     private fun stopping() {
@@ -28,18 +34,18 @@ class WebSockets(
         appPool.shutdownNow()
     }
 
-    class WebbSocketOptions {
+    class WebSocketOptions {
         var pingPeriod: Duration? = null
         var timeout: Duration = Duration.ofSeconds(15)
         var maxFrameSize = Long.MAX_VALUE
         var masking: Boolean = false
     }
 
-    companion object : ApplicationFeature<Application, WebbSocketOptions, WebSockets> {
+    companion object : ApplicationFeature<Application, WebSocketOptions, WebSockets> {
         override val key = AttributeKey<WebSockets>("WebSockets")
 
-        override fun install(pipeline: Application, configure: WebbSocketOptions.() -> Unit): WebSockets {
-            return WebbSocketOptions().also(configure).let { options ->
+        override fun install(pipeline: Application, configure: WebSocketOptions.() -> Unit): WebSockets {
+            return WebSocketOptions().also(configure).let { options ->
                 val webSockets = WebSockets(options.pingPeriod, options.timeout, options.maxFrameSize, options.masking)
 
                 pipeline.environment.monitor.applicationStopping += {

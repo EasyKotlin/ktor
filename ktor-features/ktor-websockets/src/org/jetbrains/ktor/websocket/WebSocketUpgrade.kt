@@ -9,8 +9,9 @@ import org.jetbrains.ktor.request.*
 import org.jetbrains.ktor.util.*
 import java.io.*
 import java.security.*
+import kotlin.coroutines.experimental.*
 
-class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val configure: suspend WebSocketSession.() -> Unit) : FinalContent.ProtocolUpgrade() {
+class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val handle: suspend WebSocketSession.() -> Unit) : FinalContent.ProtocolUpgrade() {
     private val key = call.request.header(HttpHeaders.SecWebSocketKey) ?: throw IllegalArgumentException("It should be ${HttpHeaders.SecWebSocketKey} header")
 
     override val status: HttpStatusCode?
@@ -27,18 +28,21 @@ class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val 
             // TODO extensions
         }
 
-    override suspend fun upgrade(call: ApplicationCall, input: ReadChannel, output: WriteChannel, channel: Closeable): Closeable {
-        val webSockets = call.application.feature(WebSockets)
-        val webSocket = WebSocketSessionImpl(call, input, output, channel, NoPool, webSockets)
+    override suspend fun upgrade(call: ApplicationCall, input: ReadChannel, output: WriteChannel, channel: Closeable, userAppContext: CoroutineContext): Closeable {
+        val webSocket = suspendCoroutine<WebSocketSessionImpl> { c ->
+            val hostContext = c.context
 
-        webSocket.pingInterval = webSockets.pingInterval
-        webSocket.timeout = webSockets.timeout
-        webSocket.maxFrameSize = webSockets.maxFrameSize
-        webSocket.masking = webSockets.masking
+            val webSockets = call.application.feature(WebSockets)
+            val webSocket = WebSocketSessionImpl(call, input, output, channel, NoPool, webSockets, hostContext, userAppContext, handle)
 
-        configure(webSocket)
+            webSocket.pingInterval = webSockets.pingInterval
+            webSocket.timeout = webSockets.timeout
+            webSocket.maxFrameSize = webSockets.maxFrameSize
+            webSocket.masking = webSockets.masking
 
-        webSocket.start()
+            webSocket.start()
+            c.resume(webSocket)
+        }
 
         return Closeable {
             runBlocking {

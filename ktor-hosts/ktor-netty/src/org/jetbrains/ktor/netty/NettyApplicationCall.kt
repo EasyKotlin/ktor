@@ -10,11 +10,13 @@ import org.jetbrains.ktor.host.*
 import org.jetbrains.ktor.pipeline.*
 import java.io.*
 import java.util.concurrent.atomic.*
+import kotlin.coroutines.experimental.*
 
 internal class NettyApplicationCall(application: Application,
                                     val context: ChannelHandlerContext,
                                     val httpRequest: HttpRequest,
-                                    contentQueue: NettyContentQueue) : BaseApplicationCall(application) {
+                                    contentQueue: NettyContentQueue,
+                                    val userAppContext: CoroutineContext) : BaseApplicationCall(application) {
 
     var completed: Boolean = false
 
@@ -89,7 +91,7 @@ internal class NettyApplicationCall(application: Application,
                     upgrade.upgrade(this@NettyApplicationCall, HttpContentReadChannel(upgradeContentQueue.queue, buffered = false), responseChannel(), Closeable {
                         context.channel().close().get()
                         upgradeContentQueue.close()
-                    })
+                    }, userAppContext)
                     context.read()
                 }
             } ?: throw IllegalStateException("Response has been already sent")

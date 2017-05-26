@@ -22,12 +22,16 @@ internal fun closeSequence(ctx: CoroutineContext, w: WebSocketWriter, timeout: D
 
                         while (true) {
                             val event = receive()
-                            if (event is CloseFrameEvent.Received) break
+                            if (event !is CloseFrameEvent.ToSend) break
                         }
                     }
 
                     is CloseFrameEvent.Received -> {
                         w.send(Frame.Close(reason ?: CloseReason(CloseReason.Codes.NORMAL, "OK")))
+                        w.flush()
+                    }
+
+                    is CloseFrameEvent.Died -> {
                         w.flush()
                     }
                 }
@@ -40,6 +44,7 @@ internal fun closeSequence(ctx: CoroutineContext, w: WebSocketWriter, timeout: D
 }
 
 sealed class CloseFrameEvent(val frame: Frame.Close) {
+    object Died : CloseFrameEvent(Frame.Close())
     class Received(frame: Frame.Close) : CloseFrameEvent(frame)
     class ToSend(frame: Frame.Close) : CloseFrameEvent(frame)
 }

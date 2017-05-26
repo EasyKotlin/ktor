@@ -36,7 +36,7 @@ abstract class KtorServlet : HttpServlet() {
             }
             val call = ServletApplicationCall(application, request, response, NoPool, { call, block, next ->
                 tryPush(request, call, block, next)
-            })
+            }, userAppContext = dispatcher)
 
             launch(dispatcher) {
                 try {
