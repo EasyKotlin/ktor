@@ -15,7 +15,6 @@ abstract class WebSocketSession internal constructor(val call: ApplicationCall) 
     private val handlers = ArrayList<suspend (Frame) -> Unit>()
     private val errorHandlers = ArrayList<(Throwable) -> Unit>()
     private val closeHandlers = ArrayList<suspend (CloseReason?) -> Unit>()
-    private val closedLatch = AsyncCountDownLatch(1)
     private val closedNotified = AtomicBoolean()
 
     /**
