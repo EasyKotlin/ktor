@@ -31,6 +31,11 @@ class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val 
         val webSockets = call.application.feature(WebSockets)
         val webSocket = WebSocketSessionImpl(call, input, output, channel, NoPool, webSockets)
 
+        webSocket.pingInterval = webSockets.pingInterval
+        webSocket.timeout = webSockets.timeout
+        webSocket.maxFrameSize = webSockets.maxFrameSize
+        webSocket.masking = webSockets.masking
+
         configure(webSocket)
 
         webSocket.start()
