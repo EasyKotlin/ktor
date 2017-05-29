@@ -152,20 +152,16 @@ abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: Applicat
     private fun Socket.assertCloseFrame(closeCode: Short = CloseReason.Codes.NORMAL.code) {
         loop@
         while (true) {
-            try {
-                val frame = getInputStream().readFrame()
+            val frame = getInputStream().readFrame()
 
-                when (frame) {
-                    is Frame.Ping -> continue@loop
-                    is Frame.Close -> {
-                        assertEquals(closeCode, frame.readReason()?.code)
-                        close()
-                        break@loop
-                    }
-                    else -> fail("Unexpected frame $frame: \n${hex(frame.buffer.getAll())}")
+            when (frame) {
+                is Frame.Ping -> continue@loop
+                is Frame.Close -> {
+                    assertEquals(closeCode, frame.readReason()?.code)
+                    close()
+                    break@loop
                 }
-            } catch (expected: EOFException) {
-                break
+                else -> fail("Unexpected frame $frame: \n${hex(frame.buffer.getAll())}")
             }
         }
     }
