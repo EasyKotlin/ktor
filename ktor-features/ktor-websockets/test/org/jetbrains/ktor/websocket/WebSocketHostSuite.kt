@@ -9,17 +9,19 @@ import org.jetbrains.ktor.routing.*
 import org.jetbrains.ktor.testing.*
 import org.jetbrains.ktor.util.*
 import org.junit.*
+import org.junit.rules.*
 import java.io.*
 import java.net.*
 import java.nio.*
 import java.time.*
 import java.util.*
+import java.util.concurrent.*
 import kotlin.test.*
 
 abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: ApplicationHostFactory<THost>) : HostTestBase<THost>(hostFactory) {
 
-//    @get:Rule
-//    val timeout = Timeout(10, TimeUnit.SECONDS)
+    @get:Rule
+    val timeout = Timeout(10, TimeUnit.SECONDS)
 
     @Test
     fun testWebSocketGenericSequence() {
@@ -97,7 +99,7 @@ abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: Applicat
         startServer(s)
 
         Socket("localhost", port).use { socket ->
-//            socket.soTimeout = 4000
+            socket.soTimeout = 4000
 
             // send upgrade request
             socket.outputStream.apply {
