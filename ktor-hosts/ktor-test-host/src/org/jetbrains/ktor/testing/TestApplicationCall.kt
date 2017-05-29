@@ -27,7 +27,7 @@ class TestApplicationCall(application: Application) : BaseApplicationCall(applic
     override fun toString(): String = "TestApplicationCall(uri=${request.uri}) : handled = $requestHandled"
 
     suspend override fun respondUpgrade(upgrade: FinalContent.ProtocolUpgrade) {
-        upgrade.upgrade(this@TestApplicationCall, request.receive<ReadChannel>(), response.realContent.value, Closeable { webSocketCompleted.countDown() }, Unconfined)
+        upgrade.upgrade(this@TestApplicationCall, request.receive<ReadChannel>(), response.realContent.value, Closeable { webSocketCompleted.countDown() }, CommonPool, Unconfined)
     }
 
     override fun responseChannel(): WriteChannel = response.realContent.value.apply {

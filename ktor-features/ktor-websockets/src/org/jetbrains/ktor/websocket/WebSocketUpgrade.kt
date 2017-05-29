@@ -11,7 +11,7 @@ import java.io.*
 import java.security.*
 import kotlin.coroutines.experimental.*
 
-class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val handle: suspend WebSocketSession.() -> Unit) : FinalContent.ProtocolUpgrade() {
+class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val handle: suspend WebSocketSession.(Dispatchers) -> Unit) : FinalContent.ProtocolUpgrade() {
     private val key = call.request.header(HttpHeaders.SecWebSocketKey) ?: throw IllegalArgumentException("It should be ${HttpHeaders.SecWebSocketKey} header")
 
     override val status: HttpStatusCode?
@@ -28,28 +28,23 @@ class WebSocketUpgrade(call: ApplicationCall, val protocol: String? = null, val 
             // TODO extensions
         }
 
-    override suspend fun upgrade(call: ApplicationCall, input: ReadChannel, output: WriteChannel, channel: Closeable, userAppContext: CoroutineContext): Closeable {
-        val webSocket = suspendCoroutine<WebSocketSessionImpl> { c ->
-            val hostContext = c.context
+    override suspend fun upgrade(call: ApplicationCall, input: ReadChannel, output: WriteChannel, channel: Closeable, hostContext: CoroutineContext, userAppContext: CoroutineContext): Closeable {
+        val webSockets = call.application.feature(WebSockets)
+        val webSocket = RawWebSocketImpl(call, input, output, channel, NoPool, hostContext, userAppContext)
 
-            val webSockets = call.application.feature(WebSockets)
-            val webSocket = WebSocketSessionImpl(call, input, output, channel, NoPool, webSockets, hostContext, userAppContext, handle)
+        webSocket.maxFrameSize = webSockets.maxFrameSize
+        webSocket.masking = webSockets.masking
 
-            webSocket.pingInterval = webSockets.pingInterval
-            webSocket.timeout = webSockets.timeout
-            webSocket.maxFrameSize = webSockets.maxFrameSize
-            webSocket.masking = webSockets.masking
-
-            webSocket.start()
-            c.resume(webSocket)
-        }
+        webSocket.start(handle)
 
         return Closeable {
             runBlocking {
-                webSocket.terminateConnection(null)
+                webSocket.terminate()
             }
         }
     }
+
+    class Dispatchers(val hostContext: CoroutineContext, val userAppContext: CoroutineContext)
 
     private fun sha1(s: String) = MessageDigest.getInstance("SHA1").digest(s.toByteArray(Charsets.ISO_8859_1))
 }

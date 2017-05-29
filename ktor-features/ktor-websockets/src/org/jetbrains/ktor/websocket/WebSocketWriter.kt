@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.*
 import kotlin.coroutines.experimental.*
 
 internal class WebSocketWriter(val writeChannel: WriteChannel, ctx: CoroutineContext, val pool: ByteBufferPool) {
-    private val queue = actor<Any>(ctx, capacity = 8) {
+    private val queue = actor(ctx, capacity = 8) {
         val ticket = pool.allocate(DEFAULT_BUFFER_SIZE)
 
         try {
@@ -17,9 +17,11 @@ internal class WebSocketWriter(val writeChannel: WriteChannel, ctx: CoroutineCon
             pool.release(ticket)
         }
     }
-    var masking: Boolean = false
 
-    fun start(ctx: CoroutineContext, pool: ByteBufferPool): ActorJob<Frame> {
+    var masking: Boolean = false
+    val outgoing: SendChannel<Frame> get() = queue
+
+    fun start(): ActorJob<Frame> {
         return queue.apply { start() }
     }
 
@@ -27,49 +29,76 @@ internal class WebSocketWriter(val writeChannel: WriteChannel, ctx: CoroutineCon
         val serializer = Serializer()
         buffer.clear()
 
-        consumeEach { msg ->
+        for (msg in this) {
             if (msg is Frame) {
                 serializer.enqueue(msg)
-                drainQueueAndSerialize(serializer, buffer)
+                if (drainQueueAndSerialize(serializer, buffer, msg is Frame.Close)) break
             } else if (msg is FlushRequest) {
-                writeChannel.flush()
-                msg.complete()
+                msg.complete() // we don't need writeChannel.flush() here as we do flush at end of every drainQueueAndSerialize
             } else throw IllegalArgumentException("unknown message $msg")
+        }
+
+        close()
+
+        consumeEach { msg ->
+            when (msg) {
+                is Frame.Close -> {} // ignore
+                is Frame.Ping, is Frame.Pong -> {} // ignore
+                is FlushRequest -> msg.complete()
+                is Frame.Text, is Frame.Binary -> {
+                    // TODO log warning?
+                }
+                else -> throw IllegalArgumentException("unknown message $msg")
+            }
         }
     }
 
-    private suspend fun ActorScope<Any>.drainQueueAndSerialize(serializer: Serializer, buffer: ByteBuffer) {
+    private suspend fun ActorScope<Any>.drainQueueAndSerialize(serializer: Serializer, buffer: ByteBuffer, closed: Boolean): Boolean {
         var flush: FlushRequest? = null
+        var closeSent = closed
 
         while (!isEmpty || serializer.hasOutstandingBytes) {
             while (flush == null && serializer.remainingCapacity > 0) {
                 val msg = poll() ?: break
                 if (msg is FlushRequest) flush = msg
-                else if (msg is Frame) {
+                else if (msg is Frame.Close) {
                     serializer.enqueue(msg)
-                }
-                else throw IllegalArgumentException("unknown message $msg")
+                    close()
+                    closeSent = true
+                    break
+                } else if (msg is Frame) {
+                    serializer.enqueue(msg)
+                } else throw IllegalArgumentException("unknown message $msg")
             }
 
             serializer.masking = masking
             serializer.serialize(buffer)
             buffer.flip()
-            writeChannel.write(buffer)
 
-            if (!serializer.hasOutstandingBytes && !buffer.hasRemaining()) {
-                flush?.let {
-                    writeChannel.flush()
-                    it.complete()
-                    flush = null
+            do {
+                writeChannel.write(buffer)
+
+                if (!serializer.hasOutstandingBytes && !buffer.hasRemaining()) {
+                    flush?.let {
+                        writeChannel.flush()
+                        it.complete()
+                        flush = null
+                    }
                 }
-            }
+            } while ((flush != null || closeSent) && buffer.hasRemaining())
+            // it is important here to not poll for more frames if we have flush request
+            // otherwise flush completion could be delayed for too long while actually could be done
 
             buffer.compact()
+
+            if (closeSent) break
         }
 
         // it is important here to flush the channel as some hosts could delay actual bytes transferring
         // as we reached here then we don't have any outstanding messages so we can flush at idle
         writeChannel.flush()
+
+        return closeSent
     }
 
 
@@ -91,7 +120,8 @@ internal class WebSocketWriter(val writeChannel: WriteChannel, ctx: CoroutineCon
             return suspendCancellableCoroutine { c ->
                 fr.setup(c)
             }
-        } catch (ignore: ClosedSendChannelException) {
+        } catch (ifClosed: ClosedSendChannelException) {
+            queue.join()
         }
     }
 

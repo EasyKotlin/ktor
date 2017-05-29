@@ -14,8 +14,9 @@ class JettyApplicationCall(application: Application,
                            servletResponse: HttpServletResponse,
                            pool: ByteBufferPool,
                            pushImpl: (ApplicationCall, ResponsePushBuilder.() -> Unit, () -> Unit) -> Unit,
+                           hostContext: CoroutineContext,
                            userAppContext: CoroutineContext)
-: ServletApplicationCall(application, servletRequest, servletResponse, pool, pushImpl, userAppContext) {
+: ServletApplicationCall(application, servletRequest, servletResponse, pool, pushImpl, hostContext, userAppContext) {
 
     suspend override fun respondUpgrade(upgrade: FinalContent.ProtocolUpgrade) {
         // Jetty doesn't support Servlet API's upgrade so we have to implement our own
@@ -31,6 +32,6 @@ class JettyApplicationCall(application: Application,
 
         servletResponse.flushBuffer()
 
-        upgrade.upgrade(this@JettyApplicationCall, inputChannel, outputChannel, connection, userAppContext)
+        upgrade.upgrade(this@JettyApplicationCall, inputChannel, outputChannel, connection, hostContext, userAppContext)
     }
 }

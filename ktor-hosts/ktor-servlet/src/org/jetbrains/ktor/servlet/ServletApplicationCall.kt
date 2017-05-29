@@ -16,6 +16,7 @@ open class ServletApplicationCall(application: Application,
                                   protected val servletResponse: HttpServletResponse,
                                   override val bufferPool: ByteBufferPool,
                                   pushImpl: (ApplicationCall, ResponsePushBuilder.() -> Unit, () -> Unit) -> Unit,
+                                  val hostContext: CoroutineContext,
                                   val userAppContext: CoroutineContext) : BaseApplicationCall(application) {
 
     override val request: ServletApplicationRequest = ServletApplicationRequest(this, servletRequest, { requestChannelOverride })
@@ -37,7 +38,7 @@ open class ServletApplicationCall(application: Application,
 
         servletResponse.flushBuffer()
         val handler = servletRequest.upgrade(ServletUpgradeHandler::class.java)
-        handler.up = UpgradeRequest(servletResponse, this@ServletApplicationCall, upgrade, userAppContext)
+        handler.up = UpgradeRequest(servletResponse, this@ServletApplicationCall, upgrade, hostContext, userAppContext)
 
 //        servletResponse.flushBuffer()
 
@@ -73,6 +74,7 @@ open class ServletApplicationCall(application: Application,
     class UpgradeRequest(val response: HttpServletResponse,
                          val call: ServletApplicationCall,
                          val upgradeMessage: FinalContent.ProtocolUpgrade,
+                         val hostContext: CoroutineContext,
                          val userAppContext: CoroutineContext)
 
     class ServletUpgradeHandler : HttpUpgradeHandler {
@@ -94,7 +96,7 @@ open class ServletApplicationCall(application: Application,
             runBlocking {
                 up.upgradeMessage.upgrade(call, inputChannel, outputChannel, Closeable {
                     wc.close()
-                }, up.userAppContext)
+                }, up.hostContext, up.userAppContext)
             }
         }
 

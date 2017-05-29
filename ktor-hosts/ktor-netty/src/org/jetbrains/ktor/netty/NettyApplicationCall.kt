@@ -3,6 +3,7 @@ package org.jetbrains.ktor.netty
 import io.netty.channel.*
 import io.netty.handler.codec.http.*
 import io.netty.util.*
+import kotlinx.coroutines.experimental.*
 import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.cio.*
 import org.jetbrains.ktor.content.*
@@ -91,7 +92,7 @@ internal class NettyApplicationCall(application: Application,
                     upgrade.upgrade(this@NettyApplicationCall, HttpContentReadChannel(upgradeContentQueue.queue, buffered = false), responseChannel(), Closeable {
                         context.channel().close().get()
                         upgradeContentQueue.close()
-                    }, userAppContext)
+                    }, context.channel().eventLoop().asCoroutineDispatcher(), userAppContext)
                     context.read()
                 }
             } ?: throw IllegalStateException("Response has been already sent")

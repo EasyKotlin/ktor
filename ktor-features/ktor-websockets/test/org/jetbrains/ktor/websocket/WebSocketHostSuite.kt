@@ -1,31 +1,34 @@
 package org.jetbrains.ktor.websocket
 
+import kotlinx.coroutines.experimental.channels.*
+import org.jetbrains.ktor.application.*
 import org.jetbrains.ktor.host.*
 import org.jetbrains.ktor.http.*
+import org.jetbrains.ktor.logging.*
+import org.jetbrains.ktor.routing.*
 import org.jetbrains.ktor.testing.*
 import org.jetbrains.ktor.util.*
 import org.junit.*
-import org.junit.rules.*
 import java.io.*
 import java.net.*
 import java.nio.*
 import java.time.*
 import java.util.*
-import java.util.concurrent.*
 import kotlin.test.*
 
 abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: ApplicationHostFactory<THost>) : HostTestBase<THost>(hostFactory) {
 
-    @get:Rule
-    val timeout = Timeout(10, TimeUnit.SECONDS)
+//    @get:Rule
+//    val timeout = Timeout(10, TimeUnit.SECONDS)
 
     @Test
     fun testWebSocketGenericSequence() {
         val collected = ArrayList<String>()
 
         createAndStartServer {
+            application.install(WebSockets)
             webSocket("/") {
-                handle { frame ->
+                incoming.consumeEach { frame ->
                     if (frame is Frame.Text) {
                         collected.add(frame.readText())
                     }
@@ -77,15 +80,24 @@ abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: Applicat
 
     @Test
     fun testWebSocketPingPong() {
-        createAndStartServer {
-            webSocket("/") {
-                timeout = Duration.ofSeconds(120)
-                pingInterval = Duration.ofMillis(50)
+        val s = createServer(null) {
+            install(CallLogging)
+            install(WebSockets)
+
+            routing {
+                webSocket("/") {
+                    timeout = Duration.ofSeconds(120)
+                    pingInterval = Duration.ofMillis(50)
+
+                    incoming.consumeEach {
+                    }
+                }
             }
         }
+        startServer(s)
 
         Socket("localhost", port).use { socket ->
-            socket.soTimeout = 4000
+//            socket.soTimeout = 4000
 
             // send upgrade request
             socket.outputStream.apply {
