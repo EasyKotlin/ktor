@@ -25,7 +25,7 @@ abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: Applicat
 
     @Test
     fun testWebSocketGenericSequence() {
-        val collected = ArrayList<String>()
+        val collected = LinkedBlockingQueue<String>()
 
         createAndStartServer {
             application.install(WebSockets)
@@ -77,7 +77,7 @@ abstract class WebSocketHostSuite<THost : ApplicationHost>(hostFactory: Applicat
             socket.assertCloseFrame()
         }
 
-        assertEquals(listOf("Hello"), collected)
+        assertEquals(listOf("Hello"), collected.toList())
     }
 
     @Test
