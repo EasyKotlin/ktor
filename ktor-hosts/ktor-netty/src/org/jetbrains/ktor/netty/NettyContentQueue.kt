@@ -6,7 +6,8 @@ import io.netty.util.*
 import org.jetbrains.ktor.pipeline.*
 
 class NettyContentQueue(val context: ChannelHandlerContext) : SuspendQueue<HttpContent>(2) {
-    fun dispose() {
+    fun dispose(t: Throwable? = null) {
+        cancel(t)
         clear { it.release() }
     }
 
@@ -33,23 +34,51 @@ internal class RawContentQueue(val context: ChannelHandlerContext) : ChannelInbo
 }
 
 internal open class HttpContentQueue(val context: ChannelHandlerContext) : SimpleChannelInboundHandler<HttpContent>(false) {
-    private var _queue: NettyContentQueue? = null
+    private val _queuesStack = ArrayList<NettyContentQueue>(2)
 
-    val queue get() = _queue ?: NettyContentQueue(context).also { _queue = it }
+    fun createNew(): NettyContentQueue {
+        val q = NettyContentQueue(context)
+        _queuesStack.add(q)
+        return q
+    }
+
+    fun pop(): NettyContentQueue {
+        return _queuesStack.removeAt(_queuesStack.lastIndex)
+    }
+
+    fun popSingle(): NettyContentQueue {
+        return when (_queuesStack.size) {
+            0 -> throw NoSuchElementException()
+            1 -> _queuesStack.removeAt(0)
+            else -> throw IllegalStateException("Multiple queues stacked")
+        }
+    }
 
     override fun channelRead0(context: ChannelHandlerContext, msg: HttpContent) {
-        queue.push(msg, msg is LastHttpContent)
+        val last = msg is LastHttpContent
+        val q = _queuesStack.firstOrNull() ?: throw IllegalStateException("No stacked queue")
+
+        q.push(msg, last)
+        if (last) {
+            _queuesStack.remove(q)
+        }
     }
 
     override fun channelInactive(ctx: ChannelHandlerContext?) {
-        close()
+        close(null)
         super.channelInactive(ctx)
     }
 
-    private fun close() {
-        _queue?.apply {
-            dispose()
-            _queue = null
+    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
+        close(cause)
+        super.exceptionCaught(ctx, cause)
+    }
+
+    private fun close(cause: Throwable?) {
+        while (_queuesStack.isNotEmpty()) {
+            pop().apply {
+                dispose(cause)
+            }
         }
     }
 }

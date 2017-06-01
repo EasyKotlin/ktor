@@ -39,18 +39,11 @@ internal class NettyApplicationCall(application: Application,
             } else {
                 // reenable read operations on a channel if keep-alive was requested
                 finishContent.addListener {
-                    // remove finished content queue, handler will install new
-                    // TODO: change it to shareable context-agnostic concurrent map
-                    try {
-                        with (context.pipeline()) {
-                            remove(HttpContentQueue::class.java)
-                            remove(NettyApplicationCallHandler::class.java)
-                        }
-                    } catch (ignore: NoSuchElementException) {
-                    }
-
                     context.channel().config().isAutoRead = true
                     context.read()
+
+                    context.channel().attr(NettyHostHttp1Handler.ResponseQueueKey).get()?.completed(this)
+                    // resume next sendResponseMessage if queued
                 }
             }
             ReferenceCountUtil.release(httpRequest)
@@ -69,7 +62,7 @@ internal class NettyApplicationCall(application: Application,
         runAsync(context.channel().eventLoop()) {
             val upgradeContentQueue = RawContentQueue(context)
 
-            context.channel().pipeline().replace(HttpContentQueue::class.java, "WebSocketReadQueue", upgradeContentQueue).queue.clear {
+            context.channel().pipeline().replace(HttpContentQueue::class.java, "WebSocketReadQueue", upgradeContentQueue).popSingle().clear {
                 if (it is LastHttpContent)
                     it.release()
                 else
@@ -96,5 +89,5 @@ internal class NettyApplicationCall(application: Application,
         }
     }
 
-    override fun responseChannel(): WriteChannel = response.responseChannel.value
+    override suspend fun responseChannel(): WriteChannel = response.responseChannel()
 }
