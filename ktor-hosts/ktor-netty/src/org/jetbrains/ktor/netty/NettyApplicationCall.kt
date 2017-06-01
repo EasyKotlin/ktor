@@ -62,11 +62,13 @@ internal class NettyApplicationCall(application: Application,
         runAsync(context.channel().eventLoop()) {
             val upgradeContentQueue = RawContentQueue(context)
 
-            context.channel().pipeline().replace(HttpContentQueue::class.java, "WebSocketReadQueue", upgradeContentQueue).popSingle().clear {
-                if (it is LastHttpContent)
-                    it.release()
-                else
-                    upgradeContentQueue.queue.push(it, false)
+            context.channel().pipeline().replace(HttpContentQueue::class.java, "WebSocketReadQueue", upgradeContentQueue).popAndForEach {
+                it.clear {
+                    if (it is LastHttpContent)
+                        it.release()
+                    else
+                        upgradeContentQueue.queue.push(it, false)
+                }
             }
 
             with(context.channel().pipeline()) {

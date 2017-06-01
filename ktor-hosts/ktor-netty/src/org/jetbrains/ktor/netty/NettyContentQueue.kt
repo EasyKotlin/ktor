@@ -46,11 +46,12 @@ internal open class HttpContentQueue(val context: ChannelHandlerContext) : Simpl
         return _queuesStack.removeAt(_queuesStack.lastIndex)
     }
 
-    fun popSingle(): NettyContentQueue {
-        return when (_queuesStack.size) {
-            0 -> throw NoSuchElementException()
-            1 -> _queuesStack.removeAt(0)
-            else -> throw IllegalStateException("Multiple queues stacked")
+    fun popAndForEach(block: (NettyContentQueue) -> Unit) {
+        val qq = _queuesStack.toList()
+        _queuesStack.clear()
+        for (q in qq) {
+            block(q)
+            q.dispose()
         }
     }
 
