@@ -16,7 +16,8 @@ internal class NettyResponseQueue(val context: ChannelHandlerContext) {
 
     fun completed(call: ApplicationCall) {
         val s = q.poll()
-        if (s?.call !== call) throw IllegalStateException()
+        if (s?.call !== call) throw IllegalStateException("Wrong call in the queue")
+        s.continuation = null
 
         q.peek()?.continuation?.resume(Unit)
     }
@@ -29,6 +30,9 @@ internal class NettyResponseQueue(val context: ChannelHandlerContext) {
         suspendCancellableCoroutine<Unit> { c ->
             val s = q.firstOrNull { it.call === call } ?: throw IllegalStateException()
             s.continuation = c
+            c.invokeOnCompletion {
+                s.continuation = null
+            }
 
             if (q.peek() === s) {
                 c.resume(Unit)
